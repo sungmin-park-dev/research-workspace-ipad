@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- 가장자리까지 채운다: macOS가 직접 둥근 모양으로 잘라 준다(여백이 있으면 흰 테두리 안에 넣어 버린다) -->
+  <rect width="1024" height="1024" fill="#111111"/>
+  <path d="M352 332 V692" stroke="#ffffff" stroke-width="44" fill="none" stroke-linecap="round"/>
+  <path d="M352 404 C352 508, 486 512, 660 512" stroke="#ffffff" stroke-width="44" fill="none" stroke-linecap="round"/>
+  <circle cx="352" cy="312" r="68" fill="#ffffff"/>
+  <circle cx="352" cy="712" r="68" fill="#ffffff"/>
+  <circle cx="712" cy="512" r="68" fill="#e0a340"/>
+</svg>
