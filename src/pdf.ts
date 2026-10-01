@@ -7,12 +7,13 @@ export interface PdfSelection { page: number; text: string }
 
 /**
  * Scrollable PDF view: pages render when they come near the screen and are dropped again when
- * far away (iPad memory). Each page has a text layer so text can be selected and quoted.
+ * far away (tablet and phone memory). Each page has a text layer so text can be selected and quoted.
  */
-export async function mountPdf(host: HTMLElement, data: ArrayBuffer, opts: { onSelect(sel: PdfSelection | null): void; onPage(page: number): void }): Promise<{ destroy(): void; pages: number }> {
+export async function mountPdf(host: HTMLElement, data: ArrayBuffer, opts: { zoom?: number; onSelect(sel: PdfSelection | null): void; onPage(page: number): void }): Promise<{ destroy(): void; pages: number }> {
   // pdf.js takes ownership of the buffer it is given; pass a copy so the stored one stays usable
   const doc = await pdfjs.getDocument({ data: new Uint8Array(data.slice(0)), isEvalSupported: false }).promise
-  const width = () => Math.min(host.clientWidth - 16, 1400)
+  // fit the page to the screen width, times the chosen zoom (the view then scrolls sideways)
+  const width = () => Math.min(host.clientWidth - 16, 1400) * (opts.zoom ?? 1)
   const first = await doc.getPage(1)
   const base = first.getViewport({ scale: 1 })
   const pages: { el: HTMLDivElement; rendered: boolean; task?: { cancel(): void } }[] = []
@@ -36,7 +37,7 @@ export async function mountPdf(host: HTMLElement, data: ArrayBuffer, opts: { onS
     const vp1 = page.getViewport({ scale: 1 })
     const scale = width() / vp1.width
     const vp = page.getViewport({ scale })
-    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const dpr = Math.min(window.devicePixelRatio || 1, 3)
     const canvas = document.createElement('canvas')
     canvas.width = Math.floor(vp.width * dpr)
     canvas.height = Math.floor(vp.height * dpr)

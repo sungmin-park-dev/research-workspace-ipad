@@ -10,7 +10,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg', 'icon-180.png'],
       manifest: {
-        name: '연구 작업대 iPad',
+        name: '연구 작업대',
         short_name: '연구 작업대',
         description: '연구 저장소를 GitHub에서 받아 오프라인으로 읽고 코멘트를 남긴다',
         lang: 'ko',

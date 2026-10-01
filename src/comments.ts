@@ -2,7 +2,7 @@
  * Comments, in the same Markdown format as the Mac app (research-workspace apps/server/src/comments.ts):
  * one file per target, workbench/comments/<target>.md, sections headed "## <id> · <코멘트|질문> · <where>".
  *
- * The iPad never edits those files. Each comment it writes becomes a new file
+ * The app never edits those files. Each comment it writes becomes a new file
  * workbench/comments/inbox/<id>.md that holds a complete one-comment file for its target
  * plus a hidden "rw-inbox" line naming the target. A new file cannot collide with edits made
  * on the Mac or by an agent, so nothing anyone wrote is ever overwritten. The Mac app (or an
@@ -156,12 +156,12 @@ export function buildInboxComment(repo: string, input: NewComment, now = new Dat
   if (text.length > 20_000) throw new Error('내용이 너무 김')
   const page = Number.isInteger(input.page) && input.page! > 0 ? input.page : undefined
   const { date, time, iso } = localStamp(now)
-  const id = `c-${date.replace(/-/g, '')}-${time.replace(':', '')}-ipad-${rand.replace(/[^a-z0-9]/g, '')}`
+  const id = `c-${date.replace(/-/g, '')}-${time.replace(':', '')}-m-${rand.replace(/[^a-z0-9]/g, '')}`
   const t = input.target
   const out = [`# 코멘트 · ${oneLine(t.title || t.target)}`]
   if (t.source) out.push(`<!-- rw-source: ${oneLine(t.source)} -->`)
-  out.push(`<!-- rw-inbox: ${JSON.stringify({ target: t.target, from: 'ipad', at: iso })} -->`)
-  out.push('', `> iPad에서 남긴 코멘트. 맥 앱이나 에이전트가 아래 절을 \`${COMMENTS_DIR}/${t.target}.md\` 끝에 옮겨 붙인 뒤 이 파일을 지운다.`)
+  out.push(`<!-- rw-inbox: ${JSON.stringify({ target: t.target, from: 'mobile', at: iso })} -->`)
+  out.push('', `> iPad·폰에서 남긴 코멘트. 맥 앱이나 에이전트가 아래 절을 \`${COMMENTS_DIR}/${t.target}.md\` 끝에 옮겨 붙인 뒤 이 파일을 지운다.`)
   out.push('', `## ${id} · ${input.kind} · ${page ? `p.${page}` : '전체'}`)
   if (quote) out.push(`> "${quote}"`)
   if (input.kind === '질문') out.push('- 상태: 대기')

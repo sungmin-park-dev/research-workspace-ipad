@@ -6,8 +6,8 @@ describe('inbox comments', () => {
 
   it('builds a one-comment file the Mac parser reads, with its target in a hidden line', () => {
     const item = buildInboxComment('o/r', { kind: '질문', target: paperTarget('research-note.pdf'), page: 4, quote: 'the  Lieb–Robinson\nvelocity', text: '속도 상한은?' }, now, 'ab12')
-    expect(item.id).toBe('c-20261001-1612-ipad-ab12')
-    expect(item.path).toBe('workbench/comments/inbox/c-20261001-1612-ipad-ab12.md')
+    expect(item.id).toBe('c-20261001-1612-m-ab12')
+    expect(item.path).toBe('workbench/comments/inbox/c-20261001-1612-m-ab12.md')
     expect(item.target).toBe('paper-research-note')
     expect(inboxTarget(item.content)).toBe('paper-research-note')
     const f = parseComments('paper-research-note', item.content)

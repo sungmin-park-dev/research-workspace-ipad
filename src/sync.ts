@@ -21,7 +21,7 @@ export const saveSettings = (s: Settings) => db.put('kv', 'settings', s)
 export const snapshotOf = (repo: string) => db.get<Snapshot>('kv', `snap:${repo}`)
 export const blobKey = (repo: string, sha: string) => `${repo}@${sha}`
 
-/** Files kept on the iPad: the workbench (blocks, logs, comments, research.yaml), LaTeX preambles and PDFs */
+/** Files kept on the device: the workbench (blocks, logs, comments, research.yaml), LaTeX preambles and PDFs */
 export function wanted(f: TreeEntry): boolean {
   if (/(^|\/)\.build\//.test(f.path)) return false
   if (/(^|\/)preamble[^/]*\.tex$|^preamble\/.*\.tex$/.test(f.path)) return f.size < 512 * 1024
@@ -51,7 +51,7 @@ export async function flushOutbox(gh: GitHub, branches: Map<string, string>): Pr
     try {
       let branch = branches.get(item.repo)
       if (!branch) { branch = await gh.defaultBranch(ref); branches.set(item.repo, branch) }
-      await gh.createFile(ref, item.path, item.content, `Add iPad comment on ${item.target}`, branch)
+      await gh.createFile(ref, item.path, item.content, `Add mobile comment on ${item.target}`, branch)
       await markSent(item)
       sent++
     } catch (e) {

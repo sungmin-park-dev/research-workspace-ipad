@@ -91,7 +91,7 @@ async function commentsFor(r: Repo, target: string): Promise<ShownComment[]> {
 }
 
 function commentView(c: ShownComment, macros: Macros, onChange: () => void): HTMLElement {
-  const badge = c.origin === 'queued' ? (c.queued?.sentAt ? h('span', { class: 'chip' }, '올림') : h('span', { class: 'chip warn' }, c.queued?.error ? '올리지 못함' : '올릴 차례')) : c.origin === 'inbox' ? h('span', { class: 'chip' }, 'iPad') : null
+  const badge = c.origin === 'queued' ? (c.queued?.sentAt ? h('span', { class: 'chip' }, '올림') : h('span', { class: 'chip warn' }, c.queued?.error ? '올리지 못함' : '올릴 차례')) : c.origin === 'inbox' ? h('span', { class: 'chip' }, '모바일') : null
   return h('div', { class: `comment ${c.kind === '질문' ? 'q' : ''}` },
     h('div', { class: 'comment-head' },
       h('b', {}, c.kind), h('span', { class: 'muted' }, c.where),
@@ -162,7 +162,7 @@ async function drawBar() {
   bar.replaceChildren(
     h('a', { class: 'home', href: '#/' }, '연구 작업대'),
     h('span', { class: 'sp' }),
-    h('span', { class: 'muted small' }, syncing ? syncNote : `${navigator.onLine ? '' : '오프라인 · '}받은 때 ${fmtTime(last)}${q ? ` · 올릴 코멘트 ${q}` : ''}`),
+    h('span', { class: 'muted small bar-status' }, syncing ? syncNote : `${navigator.onLine ? '' : '오프라인 · '}받은 때 ${fmtTime(last)}${q ? ` · 올릴 코멘트 ${q}` : ''}`),
     h('button', { class: 'btn', disabled: syncing || !settings.token, onclick: () => void runSync() }, syncing ? '동기화 중…' : '동기화'),
     h('a', { class: 'btn ghost', href: '#/settings' }, '설정'))
 }
@@ -252,7 +252,7 @@ async function blocksPage(r: Repo) {
     byParent.set(p, [...(byParent.get(p) ?? []), b])
   }
   const tree = (p: string, depth: number): HTMLElement[] => (byParent.get(p) ?? []).sort((a, b) => (a.created ?? '').localeCompare(b.created ?? '') || a.title.localeCompare(b.title))
-    .flatMap((b) => [h('a', { class: 'item', href: `#/r/${r.key}/block/${encodeURIComponent(b.id)}`, style: `padding-left:${12 + depth * 20}px` },
+    .flatMap((b) => [h('a', { class: 'item', href: `#/r/${r.key}/block/${encodeURIComponent(b.id)}`, style: `padding-left:calc(12px + ${depth} * var(--indent))` },
       h('span', { class: `chip st-${b.status}` }, STATUS[b.status] ?? (b.status || '—')), h('span', {}, b.title)), ...tree(b.id, depth + 1)])
   main.replaceChildren(repoHeader(r, await researchTitle(r), 'blocks'), blocks.length ? h('div', { class: 'list' }, tree('', 0)) : h('p', { class: 'muted' }, '블록이 없어요'))
 }
@@ -324,6 +324,8 @@ async function pdfPage(r: Repo, path: string) {
   let page = 1
   let sel: PdfSelection | null = null
   const pageLabel = h('span', { class: 'muted small' }, '')
+  let zoom = 1
+  const zoomCtl = h('span', { class: 'seg' })
   const selBtn = h('button', { class: 'btn on floating', hidden: true, onmousedown: (e: Event) => e.preventDefault(), onclick: () => {
     const s = sel
     compose(r, target, { page: s?.page ?? page, quote: s?.text }, () => void refreshComments())
@@ -333,18 +335,28 @@ async function pdfPage(r: Repo, path: string) {
   const refreshComments = async () => side.replaceChildren(await commentsPanel(r, target, macros, () => ({ page, quote: sel?.text })))
   main.replaceChildren(
     h('div', { class: 'crumbs' }, h('a', { href: '#/' }, '연구'), ' / ', h('a', { href: `#/r/${r.key}/pdfs` }, await researchTitle(r)), ' / ', name),
-    h('div', { class: 'row pdf-bar' }, pageLabel, h('span', { class: 'sp' }),
+    h('div', { class: 'row pdf-bar' }, pageLabel, zoomCtl, h('span', { class: 'sp' }),
       h('button', { class: 'btn', onclick: () => compose(r, target, { page }, () => void refreshComments()) }, '이 쪽에 코멘트'),
       h('button', { class: 'btn ghost', onclick: () => side.scrollIntoView({ behavior: 'smooth' }) }, '코멘트 보기')),
-    data ? host : h('p', { class: 'muted' }, '이 PDF는 아직 iPad에 없어요. 인터넷이 될 때 동기화해 주세요.'),
+    data ? host : h('p', { class: 'muted' }, '이 PDF는 아직 이 기기에 없어요. 인터넷이 될 때 동기화해 주세요.'),
     side, selBtn)
   await refreshComments()
   if (!data) return
-  const view = await mountPdf(host, data, {
-    onSelect: (s) => { sel = s; selBtn.hidden = !s },
-    onPage: (p) => { page = p; pageLabel.textContent = `${p} / ${view?.pages ?? ''}쪽` },
-  })
-  cleanup = () => view.destroy()
+  let view: Awaited<ReturnType<typeof mountPdf>> | null = null
+  const mount = async () => {
+    view?.destroy()
+    host.replaceChildren()
+    const keep = page
+    view = await mountPdf(host, data, {
+      zoom,
+      onSelect: (s) => { sel = s; selBtn.hidden = !s },
+      onPage: (p) => { page = p; pageLabel.textContent = `${p} / ${view?.pages ?? ''}쪽` },
+    })
+    host.querySelector<HTMLElement>(`.pdf-page[data-page="${keep}"]`)?.scrollIntoView({ block: 'start' })
+  }
+  zoomCtl.replaceChildren(...[1, 1.5, 2].map((z) => h('button', { class: `btn small ${z === zoom ? 'on' : 'ghost'}`, onclick: () => { zoom = z; zoomCtl.querySelectorAll('button').forEach((b, i) => b.className = `btn small ${[1, 1.5, 2][i] === zoom ? 'on' : 'ghost'}`); void mount() } }, `${z}×`)))
+  await mount()
+  cleanup = () => view?.destroy()
 }
 
 async function commentsPage(r: Repo) {
@@ -381,7 +393,7 @@ async function settingsPage() {
     h('label', {}, 'GitHub 토큰'), token,
     h('div', { class: 'help small' },
       h('a', { href: 'https://github.com/settings/personal-access-tokens/new', target: '_blank', rel: 'noopener' }, 'fine-grained 토큰 만들기'),
-      ' · Repository access: Only select repositories에서 아래 저장소를 고르고, Permissions › Repository permissions › Contents를 Read and write로. 토큰은 이 iPad 안에만 저장돼요. 잃어버리면 GitHub에서 토큰을 지우면 돼요.'),
+      ' · Repository access: Only select repositories에서 아래 저장소를 고르고, Permissions › Repository permissions › Contents를 Read and write로. 토큰은 이 기기 안에만 저장돼요. 잃어버리면 GitHub에서 토큰을 지우면 돼요.'),
     h('label', {}, '저장소 (한 줄에 하나, owner/name)'), repos,
     h('div', { class: 'row' },
       h('button', { class: 'btn on', onclick: async () => {
@@ -400,15 +412,15 @@ async function settingsPage() {
         void drawBar()
       } }, '저장하고 받기'),
       h('button', { class: 'btn ghost', onclick: async () => {
-        if (!confirm('토큰을 이 iPad에서 지울까요? 받아 둔 내용과 올릴 코멘트는 남아요.')) return
+        if (!confirm('토큰을 이 기기에서 지울까요? 받아 둔 내용과 올릴 코멘트는 남아요.')) return
         settings = { ...settings, token: '' }
         await saveSettings(settings)
         void settingsPage(); void drawBar()
       } }, '토큰 지우기')),
     status,
-    h('h3', {}, '이 iPad에 보관한 것'),
+    h('h3', {}, '이 기기에 보관한 것'),
     h('p', { class: 'small muted' }, use ? `${fmtSize(use.used)} 사용` : ''),
-    h('p', { class: 'small muted' }, 'Safari에서 공유 › 홈 화면에 추가로 설치하면 인터넷 없이도 열려요. 블록·일지·코멘트와 40 MB 이하 PDF를 받아 두고, 코멘트는 workbench/comments/inbox/에 새 파일로만 올려요. 원고와 다른 파일은 바꾸지 않아요.'))
+    h('p', { class: 'small muted' }, 'iPad는 Safari 공유 › 홈 화면에 추가, 갤럭시는 Chrome 메뉴(⋮) › 홈 화면에 추가(또는 앱 설치)로 설치하면 인터넷 없이도 열려요. 블록·일지·코멘트와 40 MB 이하 PDF를 받아 두고, 코멘트는 workbench/comments/inbox/에 새 파일로만 올려요. 원고와 다른 파일은 바꾸지 않아요.'))
 }
 
 // ---------- router ----------

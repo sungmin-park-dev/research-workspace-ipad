@@ -1,4 +1,4 @@
-/** The few GitHub REST calls the app needs. All go straight from the iPad to api.github.com with the user's token. */
+/** The few GitHub REST calls the app needs. All go straight from the device to api.github.com with the user's token. */
 
 const API = 'https://api.github.com'
 

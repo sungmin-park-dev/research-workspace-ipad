@@ -1,8 +1,8 @@
 /**
- * Everything the iPad keeps lives in one IndexedDB database:
+ * Everything the device keeps lives in one IndexedDB database:
  * - kv: settings and per-repository snapshots (file lists)
  * - blobs: file contents keyed by "<owner>/<repo>@<git blob sha>", so an unchanged file is never downloaded twice
- * - outbox: comments written on the iPad and not yet on GitHub
+ * - outbox: comments written on the device and not yet on GitHub
  */
 
 const DB_NAME = 'rw-ipad'

@@ -3,7 +3,7 @@ import { marked } from 'marked'
 
 /**
  * A light LaTeX-to-HTML reader for block sources: sections, lists, theorem-like environments,
- * text formatting and math (KaTeX). It is for reading on the iPad, not a TeX engine: anything it
+ * text formatting and math (KaTeX). It is for reading on a tablet or phone, not a TeX engine: anything it
  * does not know is shown as plain text, and nothing here ever writes back.
  */
 
