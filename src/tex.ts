@@ -1,5 +1,5 @@
 import katex from 'katex'
-import { marked } from 'marked'
+import { Marked } from 'marked'
 
 /**
  * A light LaTeX-to-HTML reader for block sources: sections, lists, theorem-like environments,
@@ -149,8 +149,8 @@ export function texToHtml(src: string, macros: Macros = {}): string {
   t = replaceCmd(t, 'textbf', wrap('<b>', '</b>'))
   for (const c of ['emph', 'textit']) t = replaceCmd(t, c, wrap('<i>', '</i>'))
   t = replaceCmd(t, 'texttt', wrap('<code>', '</code>'))
-  t = replaceCmd(t, 'url', (a) => hold(`<a href="${a}" target="_blank" rel="noopener">${a}</a>`))
-  t = t.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_m, u: string, x: string) => hold(`<a href="${u}" target="_blank" rel="noopener">${x}</a>`))
+  t = replaceCmd(t, 'url', (a) => hold(`<a href="${safeHref(a)}" target="_blank" rel="noopener">${a}</a>`))
+  t = t.replace(/\\href\{([^}]*)\}\{([^}]*)\}/g, (_m, u: string, x: string) => hold(`<a href="${safeHref(u)}" target="_blank" rel="noopener">${x}</a>`))
   for (const c of ['cite', 'citep', 'citet']) t = replaceCmd(t, c, (a) => hold(`<span class="cite">[${a.split(',').map((s) => s.trim()).join(', ')}]</span>`))
   for (const c of ['ref', 'eqref', 'cref', 'Cref', 'autoref']) t = replaceCmd(t, c, (a) => hold(`<span class="ref">‹${a}›</span>`))
   t = replaceCmd(t, 'label', () => '')
@@ -175,11 +175,16 @@ export function markdownToHtml(src: string, macros: Macros = {}): string {
   t = t.replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_m, pre: string, b: string) => pre + hold(renderMath(b, false, macros)))
   // code spans go back before Markdown runs so marked formats them
   t = t.replace(/@@M(\d+)@@/g, (m, i: string) => (slots[Number(i)]!.startsWith('`') ? slots[Number(i)]! : m))
-  const html = marked.parse(t, { async: false, gfm: true, breaks: false }) as string
-  return sanitize(html.replace(/@@M(\d+)@@/g, (_m, i: string) => slots[Number(i)] ?? ''))
+  const html = md.parse(t, { async: false }) as string
+  return safeUrls(html).replace(/@@M(\d+)@@/g, (_m, i: string) => slots[Number(i)] ?? '')
 }
 
-/** Markdown may carry raw HTML; keep only harmless markup */
-function sanitize(html: string): string {
-  return html.replace(/<(script|style|iframe|object|embed)[\s\S]*?<\/\1>/gi, '').replace(/\son\w+="[^"]*"/gi, '').replace(/javascript:/gi, '')
-}
+/**
+ * Synced files come from repositories other people (or agents) can write, so their Markdown is
+ * untrusted: raw HTML is shown as text, never as markup, and links keep only harmless addresses.
+ */
+const md = new Marked({ gfm: true, breaks: false, renderer: { html: ({ text }) => escapeHtml(text) } })
+
+/** http(s), mailto, in-page and plain relative addresses; anything else (javascript:, data:, entities hiding a scheme) becomes "#" */
+export const safeHref = (url: string) => (/^(https?:\/\/|mailto:|#)/i.test(url.trim()) || /^[^:&\\]*$/.test(url.trim()) ? url : '#')
+const safeUrls = (html: string) => html.replace(/\s(href|src)="([^"]*)"/g, (_m, attr: string, url: string) => ` ${attr}="${safeHref(url)}"`)

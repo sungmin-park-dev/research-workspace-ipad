@@ -49,3 +49,23 @@ describe('block notes', () => {
     expect(texToHtml('\\section{V (\\ensuremath{J_\\Gamma})}')).toContain('class="katex"')
   })
 })
+
+describe('untrusted Markdown and TeX', () => {
+  it('shows raw HTML as text, whatever its quoting', () => {
+    for (const evil of [`<img src=x onerror='alert(1)'>`, '<img src=x onerror=alert(1)>', '<script>alert(1)</script>', '<svg onload="alert(1)">', 'x <b onclick=alert(1)>y</b>']) {
+      const html = markdownToHtml(evil)
+      expect(html).not.toMatch(/<(img|script|svg|b)\b/i)
+    }
+  })
+  it('keeps only harmless link addresses', () => {
+    expect(markdownToHtml('[a](javascript:alert(1))')).not.toMatch(/javascript:/i)
+    expect(markdownToHtml('[a](data:text/html,x)')).toContain('href="#"')
+    expect(markdownToHtml('[a](https://arxiv.org/abs/1)')).toContain('href="https://arxiv.org/abs/1"')
+    expect(texToHtml('\\href{javascript:alert(1)}{x} \\url{javascript:alert(2)}')).not.toMatch(/href="javascript:/i)
+  })
+  it('still renders math and code', () => {
+    const html = markdownToHtml('값 $x^2$ 와 `<b>`')
+    expect(html).toContain('katex')
+    expect(html).toContain('&lt;b&gt;')
+  })
+})
