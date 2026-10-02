@@ -6,7 +6,7 @@ import { blockTarget, buildInboxComment, COMMENTS_DIR, INBOX_DIR, inboxTarget, l
 import * as db from './db'
 import { GitHub, parseRepo, repoKey, type RepoRef, type TreeEntry } from './github'
 import { mountPdf, type PdfSelection } from './pdf'
-import { DEFAULT_REPOS, enqueue, dropQueued, flushOutbox, loadSettings, MAX_PDF_BYTES, outbox, readBytes, readText, saveSettings, snapshotOf, syncAll, type Settings, type Snapshot } from './sync'
+import { DEFAULT_REPOS, syncRepo, enqueue, dropQueued, flushOutbox, loadSettings, MAX_PDF_BYTES, outbox, readBytes, readText, saveSettings, snapshotOf, syncAll, type Settings, type Snapshot } from './sync'
 import { blockMeta, blockNotes, collectMacros, escapeHtml, markdownToHtml, texToHtml, type Macros } from './tex'
 
 registerSW({ immediate: true })
@@ -104,14 +104,42 @@ function commentView(c: ShownComment, macros: Macros, onChange: () => void): HTM
     c.answers.map((a) => h('div', { class: 'answer' }, h('div', { class: 'muted small' }, `답 · ${a.by} · ${a.at}`), h('div', { class: 'md', html: markdownToHtml(a.body, macros) }))))
 }
 
+/** While a question on the open screen waits for an answer, check GitHub every so often and redraw when it arrives */
+const ANSWER_POLL_MS = 30_000
+const ANSWER_POLL_FOR_MS = 30 * 60_000
+let answerWatch: { timer: number; key: string } | null = null
+function stopAnswerWatch() {
+  if (answerWatch) clearInterval(answerWatch.timer)
+  answerWatch = null
+}
+const waitingForAnswer = (c: ShownComment) => c.kind === '질문' && c.state === '대기' && !c.answers.length && !(c.origin === 'queued' && !c.queued?.sentAt)
+
 async function commentsPanel(r: Repo, target: CommentTarget, macros: Macros, extra: () => { page?: number; quote?: string } = () => ({})): Promise<HTMLElement> {
   const box = h('section', { class: 'comments' })
+  const key = `${r.key}|${target.target}`
+  const started = Date.now()
   const draw = async () => {
-    const list = await commentsFor(r, target.target)
-    box.replaceChildren(
+    const fresh = (await repo(r.key)) ?? r
+    const list = await commentsFor(fresh, target.target)
+    const waiting = list.some(waitingForAnswer)
+    box.replaceChildren(h('div', {},
       h('div', { class: 'row' }, h('h3', {}, `코멘트·질문 ${list.length || ''}`), h('span', { class: 'sp' }),
-        h('button', { class: 'btn', onclick: () => compose(r, target, extra(), draw) }, '+ 남기기')),
-      list.length ? h('div', {}, list.map((c) => commentView(c, macros, draw))) : h('p', { class: 'muted' }, '아직 없음'))
+        h('button', { class: 'btn', onclick: () => compose(r, target, extra(), () => void draw()) }, '+ 남기기')),
+      waiting ? h('p', { class: 'small muted' }, settings.token && navigator.onLine ? 'Claude의 답을 기다리는 중이에요. 이 화면을 열어 두면 답이 오는 대로 보여요.' : '인터넷이 연결되면 답을 받아 와요.') : null,
+      list.length ? h('div', {}, list.map((c) => commentView(c, macros, () => void draw()))) : h('p', { class: 'muted' }, '아직 없음')))
+    if (waiting && (!answerWatch || answerWatch.key !== key)) {
+      stopAnswerWatch()
+      answerWatch = {
+        key,
+        timer: window.setInterval(async () => {
+          if (!box.isConnected || Date.now() - started > ANSWER_POLL_FOR_MS) { stopAnswerWatch(); return }
+          if (syncing || !settings.token || !navigator.onLine) return
+          await sendQueued()
+          const res = await syncRepo(new GitHub(settings.token), r.ref, new Map())
+          if (res.ok) { void drawBar(); await draw() }
+        }, ANSWER_POLL_MS),
+      }
+    } else if (!waiting && answerWatch?.key === key) stopAnswerWatch()
   }
   await draw()
   return box
@@ -427,6 +455,7 @@ async function settingsPage() {
 
 async function route() {
   cleanup?.(); cleanup = null
+  stopAnswerWatch()
   window.scrollTo(0, 0)
   const parts = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent)
   try {

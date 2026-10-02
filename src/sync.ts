@@ -73,6 +73,32 @@ const markSent = (item: OutboxItem) => db.put('outbox', item.id, { ...item, erro
 
 export interface SyncResult { repos: { repo: string; ok: boolean; error?: string; downloaded: number }[]; sent: number; failed: number }
 
+/** Bring one repository's snapshot up to date; files already kept (same blob sha) are not downloaded again */
+export async function syncRepo(gh: GitHub, r: RepoRef, branches: Map<string, string>, onProgress: (p: Progress) => void = () => {}): Promise<SyncResult['repos'][number] & { stop?: boolean }> {
+  const key = repoKey(r)
+  let downloaded = 0
+  try {
+    onProgress({ phase: `${r.repo} 목록 받는 중`, done: 0, total: 0 })
+    const branch = branches.get(key) ?? await gh.defaultBranch(r)
+    branches.set(key, branch)
+    const t = await gh.tree(r, branch)
+    const need: TreeEntry[] = []
+    for (const f of t.files.filter(wanted)) if (!(await db.get('blobs', blobKey(key, f.sha)))) need.push(f)
+    for (const f of need) {
+      onProgress({ phase: `${r.repo} 받는 중 · ${f.path.split('/').pop()}`, done: downloaded, total: need.length })
+      await db.put('blobs', blobKey(key, f.sha), await gh.blob(r, f.sha))
+      downloaded++
+    }
+    await db.put('kv', `snap:${key}`, { repo: key, branch, commit: t.commit, syncedAt: new Date().toISOString(), files: t.files, truncated: t.truncated } satisfies Snapshot)
+    // sent comments now come from the synced files; forget the local copies
+    const paths = new Set(t.files.map((f) => f.path))
+    for (const item of await outbox()) if (item.repo === key && item.sentAt && paths.has(item.path)) await db.del('outbox', item.id)
+    return { repo: key, ok: true, downloaded }
+  } catch (e) {
+    return { repo: key, ok: false, error: (e as Error).message, downloaded, stop: e instanceof GitHubError && (e.status === 0 || e.status === 401) }
+  }
+}
+
 export async function syncAll(s: Settings, onProgress: (p: Progress) => void = () => {}): Promise<SyncResult> {
   const gh = new GitHub(s.token)
   const branches = new Map<string, string>()
@@ -80,28 +106,10 @@ export async function syncAll(s: Settings, onProgress: (p: Progress) => void = (
   const { sent, failed } = await flushOutbox(gh, branches)
   const result: SyncResult = { repos: [], sent, failed }
   for (const r of s.repos) {
-    const key = repoKey(r)
-    let downloaded = 0
-    try {
-      onProgress({ phase: `${r.repo} 목록 받는 중`, done: 0, total: 0 })
-      const branch = branches.get(key) ?? await gh.defaultBranch(r)
-      const t = await gh.tree(r, branch)
-      const need: TreeEntry[] = []
-      for (const f of t.files.filter(wanted)) if (!(await db.get('blobs', blobKey(key, f.sha)))) need.push(f)
-      for (const f of need) {
-        onProgress({ phase: `${r.repo} 받는 중 · ${f.path.split('/').pop()}`, done: downloaded, total: need.length })
-        await db.put('blobs', blobKey(key, f.sha), await gh.blob(r, f.sha))
-        downloaded++
-      }
-      await db.put('kv', `snap:${key}`, { repo: key, branch, commit: t.commit, syncedAt: new Date().toISOString(), files: t.files, truncated: t.truncated } satisfies Snapshot)
-      // sent comments now come from the synced files; forget the local copies
-      const paths = new Set(t.files.map((f) => f.path))
-      for (const item of await outbox()) if (item.repo === key && item.sentAt && paths.has(item.path)) await db.del('outbox', item.id)
-      result.repos.push({ repo: key, ok: true, downloaded })
-    } catch (e) {
-      result.repos.push({ repo: key, ok: false, error: (e as Error).message, downloaded })
-      if (e instanceof GitHubError && (e.status === 0 || e.status === 401)) break
-    }
+    const res = await syncRepo(gh, r, branches, onProgress)
+    const { stop: _stop, ...row } = res
+    result.repos.push(row)
+    if (res.stop) break
   }
   // drop contents no snapshot points to any more (only once every repository synced, so nothing still readable is lost)
   if (result.repos.length === s.repos.length && result.repos.every((r) => r.ok)) {
