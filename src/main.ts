@@ -66,6 +66,8 @@ const inlineMd = (s: string, macros: Macros) => markdownToHtml(s, macros).replac
 let settings: Settings = { token: '', repos: DEFAULT_REPOS }
 let syncing = false
 let syncNote = ''
+/** What went wrong in the last sync, per repository, shown on the home screen until a sync succeeds */
+let syncErrors: string[] = []
 let cleanup: (() => void) | null = null
 
 interface Repo { ref: RepoRef; key: string; snap: Snapshot | undefined; files: Map<string, TreeEntry> }
@@ -303,11 +305,16 @@ async function drawBar() {
   const snaps = await Promise.all(settings.repos.map((r) => snapshotOf(repoKey(r))))
   const last = snaps.map((s) => s?.syncedAt).filter(Boolean).sort().at(0)
   const online = navigator.onLine
-  const state = syncing ? syncNote : !online ? `오프라인 · ${fmtTime(last)}` : q ? `올릴 것 ${q}` : `${fmtTime(last)} 동기화`
+  const state = syncing ? syncNote
+    : !settings.token ? '토큰 필요'
+    : !online ? (last ? `오프라인 · ${fmtTime(last)}` : '오프라인')
+    : syncErrors.length ? '받기 실패'
+    : q ? `올릴 것 ${q}`
+    : last ? `${fmtTime(last)} 받음` : '아직 받지 않음'
   fill(bar,
     barBack ? h('a', { class: 'icon-btn', href: barBack, 'aria-label': '뒤로' }, icon('back')) : null,
     h('span', { class: 'place' }, ...barPlace),
-    h('span', { class: `sync ${!online ? 'off' : q || syncing ? 'wait' : ''}` }, h('i'), state),
+    h('span', { class: `sync ${!online || !settings.token ? 'off' : syncErrors.length ? 'bad' : q || syncing || !last ? 'wait' : ''}` }, h('i'), state),
     h('button', { class: `icon-btn ${syncing ? 'spin' : ''}`, 'aria-label': '동기화', title: '동기화', disabled: syncing || !settings.token, onclick: () => void runSync() }, icon('sync')))
   void drawTabs(q)
 }
@@ -338,8 +345,10 @@ async function runSync() {
   try {
     const res = await syncAll(settings, (p) => { syncNote = p.total ? `${p.phase} ${p.done + 1}/${p.total}` : p.phase; void drawBar() })
     const bad = res.repos.filter((r) => !r.ok)
+    syncErrors = bad.map((b) => `${b.repo.split('/')[1]}: ${b.error}`)
     toast(bad.length ? `일부 실패: ${bad.map((b) => `${b.repo.split('/')[1]} — ${b.error}`).join(', ')}` : `받았어요${res.sent ? ` · 코멘트 ${res.sent}개 올림` : ''}`, !!bad.length)
   } catch (e) {
+    syncErrors = [(e as Error).message]
     toast((e as Error).message, true)
   } finally {
     syncing = false
@@ -364,8 +373,8 @@ const show = (...nodes: Child[]) => { main.className = ''; main.replaceChildren(
 
 interface Answered { r: Repo; target: string; title: string; c: ShownComment; at: string }
 async function home() {
-  if (!settings.token) { location.hash = '#/settings'; return }
   setTop(null, h('b', {}, '연구 작업대'))
+  if (!settings.token) { show(...setupView()); return }
   const cards: HTMLElement[] = []
   const answered: Answered[] = []
   for (const r of await allRepos()) {
@@ -399,9 +408,11 @@ async function home() {
   }
   show(
     h('div', {}, h('h1', { class: 'h-title' }, '연구'), h('p', { class: 'h-sub' }, '인터넷 없이도 읽을 수 있어요. 질문과 코멘트는 연결되면 올려요.')),
+    syncErrors.length ? h('div', { class: 'alert' }, h('b', {}, '받지 못한 것이 있어요'), h('ul', {}, syncErrors.map((e) => h('li', {}, e))),
+      h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => void runSync() }, '다시 받기'), h('a', { class: 'btn', href: '#/settings' }, '토큰 바꾸기'))) : null,
     recent.length ? h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, '최근 답'), h('span', { class: 'count' }, String(answered.length))), h('div', { class: 'rows' }, recent)) : null,
     cards.length ? h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, '연구'), h('span', { class: 'count' }, String(cards.length))), h('div', { class: 'cards' }, cards))
-      : h('div', { class: 'empty' }, '아직 받은 연구가 없어요. 위의 동기화 버튼을 눌러 주세요.'))
+      : h('div', { class: 'empty' }, syncing ? '받는 중이에요. 처음에는 PDF까지 받느라 몇 분 걸릴 수 있어요.' : '아직 받은 연구가 없어요. 위의 동기화 버튼을 눌러 주세요.'))
 }
 
 type Tab = 'blocks' | 'logs' | 'pdfs' | 'comments'
@@ -576,6 +587,44 @@ async function commentsPage(r: Repo | null) {
     sections.length ? h('div', { style: 'display:flex;flex-direction:column;gap:var(--sp-6)' }, sections) : h('div', { class: 'empty' }, '코멘트가 없어요'))
 }
 
+/** GitHub's new-token page with the name, expiry and Contents read/write already filled in */
+const TOKEN_URL = 'https://github.com/settings/personal-access-tokens/new?' + new URLSearchParams({
+  name: '연구 작업대 폰', description: '폰·아이패드 연구 작업대: 연구 읽기와 코멘트 올리기', expires_in: '90', contents: 'write',
+}).toString()
+
+async function saveToken(token: string, repos: RepoRef[], status: HTMLElement) {
+  settings = { token: token.trim(), repos }
+  if (!settings.token) { status.textContent = '토큰을 붙여 넣어 주세요'; return }
+  await saveSettings(settings)
+  status.textContent = '토큰을 확인하는 중…'
+  try {
+    const who = await new GitHub(settings.token).user()
+    status.textContent = `${who} 계정으로 연결했어요. 연구를 받아요.`
+    await db.persist()
+    void drawBar()
+    location.hash = '#/'
+    void route()
+    await runSync()
+  } catch (e) { status.textContent = `토큰을 저장했지만 확인하지 못했어요: ${(e as Error).message}`; void drawBar() }
+}
+
+/** First run: what to do, in order, with the token box right here */
+function setupView(): HTMLElement[] {
+  const token = h('input', { id: 'setup-token', type: 'password', placeholder: 'github_pat_로 시작하는 토큰', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' })
+  const status = h('div', { class: 'help', role: 'status' })
+  const step = (n: number, ...body: Child[]) => h('li', {}, h('span', { class: 'step-n' }, String(n)), h('div', {}, ...body))
+  return [
+    h('div', {}, h('h1', { class: 'h-title' }, '시작하기'), h('p', { class: 'h-sub' }, '연구를 받으려면 GitHub 토큰이 한 번 필요해요. 토큰은 이 폰 안에만 저장돼요.')),
+    h('ol', { class: 'steps' },
+      step(1, h('b', {}, 'GitHub에서 토큰 만들기'), h('div', { class: 'help' }, '이름·기간·권한은 채워져 있어요. Repository access에서 Only select repositories를 누르고 아래 저장소를 고르세요.'),
+        h('div', { class: 'help mono' }, settings.repos.map((r) => h('div', {}, repoKey(r)))),
+        h('a', { class: 'btn', href: TOKEN_URL, target: '_blank', rel: 'noopener' }, 'GitHub 토큰 페이지 열기')),
+      step(2, h('b', {}, '맨 아래 Generate token을 누르고 토큰 복사하기')),
+      step(3, h('b', {}, '여기에 붙여 넣기'), token,
+        h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => void saveToken(token.value, settings.repos, status) }, '저장하고 받기')), status)),
+  ]
+}
+
 async function settingsPage() {
   setTop(null, h('b', {}, '설정'))
   const token = h('input', { id: 'token', type: 'password', value: settings.token, placeholder: 'github_pat_…', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' })
@@ -587,25 +636,16 @@ async function settingsPage() {
     h('h1', { class: 'h-title' }, '설정'),
     h('section', { class: 'form' },
       h('label', { for: 'token' }, 'GitHub 토큰'), token,
+      settings.token ? h('div', { class: 'help' }, `저장된 토큰 있음 (…${settings.token.slice(-4)})`) : h('div', { class: 'help error' }, '저장된 토큰이 없어요'),
       h('div', { class: 'help' },
-        h('a', { href: 'https://github.com/settings/personal-access-tokens/new', target: '_blank', rel: 'noopener' }, 'fine-grained 토큰 만들기'),
+        h('a', { href: TOKEN_URL, target: '_blank', rel: 'noopener' }, 'fine-grained 토큰 만들기'),
         ' · Repository access: Only select repositories에서 아래 저장소를 고르고, Permissions › Repository permissions › Contents를 Read and write로. 토큰은 이 기기 안에만 저장돼요. 잃어버리면 GitHub에서 토큰을 지우면 돼요.'),
       h('label', { for: 'repos' }, '저장소 (한 줄에 하나, owner/name)'), repos,
       h('div', { class: 'actions' },
         h('button', { class: 'btn primary', onclick: async () => {
-          const list = repos.value.split('\n').map((s) => s.trim()).filter(Boolean)
-          const parsed = list.map(parseRepo)
+          const parsed = repos.value.split('\n').map((s) => s.trim()).filter(Boolean).map(parseRepo)
           if (parsed.some((p) => !p)) { status.textContent = '저장소 이름을 owner/name으로 적어 주세요'; return }
-          settings = { token: token.value.trim(), repos: parsed as RepoRef[] }
-          await saveSettings(settings)
-          status.textContent = '확인 중…'
-          try {
-            const who = await new GitHub(settings.token).user()
-            status.textContent = `저장했어요 (${who}). 받기를 시작해요.`
-            await db.persist()
-            void runSync()
-          } catch (e) { status.textContent = `저장했지만 확인 실패: ${(e as Error).message}` }
-          void drawBar()
+          await saveToken(token.value, parsed as RepoRef[], status)
         } }, '저장하고 받기'),
         h('button', { class: 'btn', onclick: async () => {
           if (!confirm('토큰을 이 기기에서 지울까요? 받아 둔 내용과 올릴 코멘트는 남아요.')) return
