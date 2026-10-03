@@ -460,6 +460,7 @@ async function blockPage(r: Repo, id: string) {
   const k = kindOf(b)
   const link = (x: BlockInfo) => h('a', { href: blockHref(r, x.id) }, glyph(kindOf(x)), ' ', x.title)
   const notes = blockNotes(src)
+  const body = dropTitleSection(src, b.title)
   show(
     h('header', { class: 'doc-head' },
       h('div', { class: 'pills' }, h('span', { class: 'pill' }, glyph(k), GLYPH[k][1])),
@@ -468,9 +469,26 @@ async function blockPage(r: Repo, id: string) {
         parent ? [h('dt', {}, '위'), h('dd', {}, link(parent))] : [],
         children.length ? [h('dt', {}, '아래'), h('dd', {}, children.flatMap((c, i) => [i ? h('br') : null, link(c)]))] : [],
         b.next ? [h('dt', {}, '다음'), h('dd', { html: inlineMd(b.next, macros) })] : []) : null),
-    h('article', { class: 'tex', html: texToHtml(src, macros) }),
+    hasBody(body) ? h('article', { class: 'tex', html: texToHtml(body, macros) }) : h('div', { class: 'empty' }, '아직 본문이 없어요'),
     notes.length ? h('div', { class: 'notes' }, h('div', { class: 'muted' }, '원본의 메모 줄'), h('ul', {}, notes.map((n) => h('li', { html: inlineMd(n, macros) })))) : null,
     await commentsPanel(r, blockTarget(b.id, b.title), macros))
+}
+
+// The block header already shows the title, so a leading \section{title} would repeat it.
+function dropTitleSection(src: string, title: string): string {
+  const m = /^\\section\*?\{(.*)\}[ \t]*$/m.exec(src)
+  return m && (m[1] ?? '').trim() === title.trim() ? src.slice(0, m.index) + src.slice(m.index + m[0].length) : src
+}
+const hasBody = (src: string) => src.split('\n').some((l) => l.trim() && !l.trim().startsWith('%'))
+
+// Log entries written in one sitting repeat the same "## time · kind · tag" header; show it once.
+function mergeRepeatedHeads(md: string): string {
+  let last = ''
+  return md.split('\n').filter((line) => {
+    if (/^#{1,6}\s/.test(line)) { const same = line === last; last = line; return !same }
+    if (line.trim()) last = /^\s*[-*]\s/.test(line) ? last : ''
+    return true
+  }).join('\n').replace(/\n{3,}/g, '\n\n').replace(/^(\s*[-*] .*)\n\n(?=\s*[-*] )/gm, '$1\n')
 }
 
 async function logsPage(r: Repo) {
@@ -480,7 +498,7 @@ async function logsPage(r: Repo) {
   const parts: HTMLElement[] = []
   for (const d of logs) {
     const text = (await readText(r.key, r.files.get(`workbench/log/${d}.md`))) ?? ''
-    parts.push(h('article', { class: 'log' }, h('div', { class: 'md', html: markdownToHtml(text, macros) }),
+    parts.push(h('article', { class: 'log' }, h('div', { class: 'md', html: markdownToHtml(mergeRepeatedHeads(text), macros) }),
       h('a', { class: 'small', href: `#/r/${r.key}/log/${encodeURIComponent(d)}` }, '이 날에 질문·코멘트')))
   }
   show(seg, parts.length ? h('div', {}, parts) : h('div', { class: 'empty' }, '일지가 없어요'))
@@ -490,7 +508,7 @@ async function logPage(r: Repo, d: string) {
   await repoTop(r, null, `#/r/${r.key}/logs`, '일지 › ', h('b', {}, d))
   const macros = await macrosFor(r)
   const text = (await readText(r.key, r.files.get(`workbench/log/${d}.md`))) ?? ''
-  show(h('article', { class: 'md', html: markdownToHtml(text, macros) }), await commentsPanel(r, logTarget(d), macros))
+  show(h('article', { class: 'md', html: markdownToHtml(mergeRepeatedHeads(text), macros) }), await commentsPanel(r, logTarget(d), macros))
 }
 
 async function pdfsPage(r: Repo) {
