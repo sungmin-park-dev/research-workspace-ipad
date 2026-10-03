@@ -5,7 +5,7 @@ import { parse as parseYaml } from 'yaml'
 import { blockTarget, buildInboxComment, COMMENTS_DIR, INBOX_DIR, inboxTarget, logTarget, paperTarget, parseComments, type CommentEntry, type CommentKind, type CommentTarget, type OutboxItem } from './comments'
 import * as db from './db'
 import { GitHub, parseRepo, repoKey, type RepoRef, type TreeEntry } from './github'
-import { mountPdf, type PdfSelection } from './pdf'
+import { mountPdf, type PdfSelection, type PdfView } from './pdf'
 import { DEFAULT_REPOS, syncRepo, enqueue, dropQueued, flushOutbox, loadSettings, MAX_PDF_BYTES, outbox, readBytes, readText, saveSettings, snapshotOf, syncAll, type Settings, type Snapshot } from './sync'
 import { blockMeta, blockNotes, collectMacros, escapeHtml, markdownToHtml, texToHtml, type Macros } from './tex'
 
@@ -425,6 +425,46 @@ async function repoTop(r: Repo, tab: Tab | null, back: string | null = '#/', ...
   return tab ? h('nav', { class: 'seg', 'aria-label': '화면' }, TABS.map(([t, label]) => h('a', { class: t === tab ? 'on' : '', href: `#/r/${r.key}/${t}` }, label))) : null
 }
 
+/** The research's own write-ups: each manuscript .tex in research.yaml with the PDF built from it */
+interface MainDoc { path: string; label: string }
+async function mainDocs(r: Repo): Promise<MainDoc[]> {
+  const yaml = await readText(r.key, r.files.get('workbench/research.yaml'))
+  let list: unknown = []
+  try { list = yaml ? (parseYaml(yaml) as { sources?: { manuscript?: unknown } })?.sources?.manuscript ?? [] : [] } catch { /* none */ }
+  const pdfs = [...r.files.keys()].filter((p) => /\.pdf$/i.test(p))
+  const docs: MainDoc[] = []
+  for (const item of Array.isArray(list) ? list : [list]) {
+    const [src, label] = String(item).split(/\s+—\s+/)
+    if (!src || !/\.tex$/.test(src)) continue
+    const dir = src.includes('/') ? src.slice(0, src.lastIndexOf('/') + 1) : ''
+    const pdf = pdfs.find((p) => p === src.replace(/\.tex$/, '.pdf')) ?? pdfs.filter((p) => p.startsWith(`${dir}output/`) && !p.slice(dir.length + 7).includes('/')).sort()[0]
+    if (pdf && !docs.some((d) => d.path === pdf)) docs.push({ path: pdf, label: label?.trim() || pdf.split('/').pop()! })
+  }
+  return docs
+}
+
+// The page last read in each PDF, kept on this device only
+const pageKey = (r: Repo, path: string) => `rw-page:${r.key}:${path}`
+function lastPage(r: Repo, path: string): number {
+  try { return Number(localStorage.getItem(pageKey(r, path))) || 0 } catch { return 0 }
+}
+function rememberPage(r: Repo, path: string, page: number) {
+  try { localStorage.setItem(pageKey(r, path), String(page)) } catch { /* private mode */ }
+}
+
+async function mainDocCards(r: Repo): Promise<HTMLElement | null> {
+  const docs = await mainDocs(r)
+  if (!docs.length) return null
+  return h('div', { class: 'main-docs' }, docs.map((d) => {
+    const at = lastPage(r, d.path)
+    return h('a', { class: 'card main-doc', href: `#/r/${r.key}/pdf/${encodeURIComponent(d.path)}` },
+      h('span', { class: 'kicker' }, '본문'),
+      h('span', { class: 't' }, d.label),
+      h('span', { class: 'f' }, h('span', {}, at > 1 ? `지난번 ${at}쪽까지 읽음` : d.path)),
+      h('span', { class: 'btn primary' }, at > 1 ? `${at}쪽부터 읽기` : '읽기'))
+  }))
+}
+
 async function blocksPage(r: Repo) {
   const seg = await repoTop(r, 'blocks')
   const blocks = await blocksOf(r)
@@ -440,7 +480,7 @@ async function blocksPage(r: Repo) {
     return [h('a', { class: 'nav', href: blockHref(r, b.id) }, glyph(kindOf(b)), h('span', { class: 'label' }, b.title)), ...(kids.length ? [h('div', { class: 'tree' }, kids)] : [])]
   })
   const ends = branchEnds(blocks)
-  show(seg,
+  show(seg, await mainDocCards(r),
     ends.length ? h('section', {}, h('div', { class: 'sec-head' }, h('h2', {}, '이어서 할 것'), h('span', { class: 'count' }, '진행 중인 가지 끝')),
       h('div', { class: 'rows' }, ends.slice(0, 4).map((b) => h('a', { class: 'row', href: blockHref(r, b.id) }, glyph('progress'),
         h('div', {}, h('div', { class: 't' }, b.title), b.next ? h('div', { class: 'd', html: `다음 · ${inlineMd(b.next, macros)}` }) : null), h('span'))))) : null,
@@ -513,7 +553,8 @@ async function logPage(r: Repo, d: string) {
 
 async function pdfsPage(r: Repo) {
   const seg = await repoTop(r, 'pdfs')
-  const pdfs = [...r.files.values()].filter((f) => /\.pdf$/i.test(f.path)).sort((a, b) => a.path.localeCompare(b.path))
+  const ownDocs = new Set((await mainDocs(r)).map((d) => d.path))
+  const pdfs = [...r.files.values()].filter((f) => /\.pdf$/i.test(f.path) && !ownDocs.has(f.path)).sort((a, b) => a.path.localeCompare(b.path))
   const groups = new Map<string, TreeEntry[]>()
   for (const f of pdfs) {
     const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '맨 위'
@@ -529,52 +570,127 @@ async function pdfsPage(r: Repo) {
         h('span', { class: 'm' }, fmtSize(f.size))))
     }
   }
-  show(seg, rows.length ? h('div', { class: 'rows' }, rows) : h('div', { class: 'empty' }, 'GitHub에 올라간 PDF가 없어요. 맥에서 결과 PDF를 커밋해 올리면 여기에 보여요.'))
+  show(seg, await mainDocCards(r), rows.length ? h('div', { class: 'rows' }, rows) : h('div', { class: 'empty' }, 'GitHub에 올라간 PDF가 없어요. 맥에서 결과 PDF를 커밋해 올리면 여기에 보여요.'))
 }
 
 async function pdfPage(r: Repo, path: string) {
   const f = r.files.get(path)
   const name = path.split('/').pop()!
-  await repoTop(r, null, `#/r/${r.key}/pdfs`, 'PDF › ', h('b', {}, name))
+  const own = (await mainDocs(r)).find((d) => d.path === path)
+  if (own) await repoTop(r, null, `#/r/${r.key}`, '본문 › ', h('b', {}, own.label))
+  else await repoTop(r, null, `#/r/${r.key}/pdfs`, 'PDF › ', h('b', {}, name))
   const data = f && (await readBytes(r.key, f))
   const macros = await macrosFor(r)
   const target = paperTarget(name)
-  let page = 1
+  let page = Math.max(1, lastPage(r, path))
   let sel: PdfSelection | null = null
-  const pageLabel = h('span', {}, '')
   let zoom = 1
-  const zoomCtl = h('span', { class: 'seg inline', role: 'group', 'aria-label': '확대' })
-  const selBtn = h('button', { class: 'btn primary floating', hidden: true, onmousedown: (e: Event) => e.preventDefault(), onclick: () => {
+  const selBtn = h('button', { class: 'btn primary floating above-bar', hidden: true, onmousedown: (e: Event) => e.preventDefault(), onclick: () => {
     const s = sel
     compose(r, target, { page: s?.page ?? page, quote: s?.text }, () => void refreshComments())
   } }, '고른 글로 질문하기')
   const host = h('div', { class: 'pdf' })
+  const area = h('div', { class: 'pdf-area' }, host)
   const side = h('div', { class: 'pdf-side' })
+  const tools = h('div', { class: 'pdf-tools' },
+    h('span', { class: 'hint' }, '두 손가락으로 확대 · 두 번 톡 하면 글 폭'), h('span', { class: 'sp' }),
+    h('button', { class: 'btn', onclick: () => compose(r, target, { page }, () => void refreshComments()) }, '이 쪽에 질문'),
+    h('button', { class: 'btn quiet wide-only', onclick: () => side.scrollIntoView({ behavior: 'smooth' }) }, '코멘트 보기'))
+  const pageNo = h('span', { class: 'n' }, '')
+  const zoomBtn = h('button', { class: 'z', hidden: true, 'aria-label': '글 폭에 맞추기', onclick: () => void setZoom(1) }, '')
+  const bar = h('div', { class: 'page-bar' },
+    h('button', { 'aria-label': '앞 쪽', onclick: () => jump(page - 1) }, '‹'), pageNo,
+    h('button', { 'aria-label': '다음 쪽', onclick: () => jump(page + 1) }, '›'), zoomBtn)
   const refreshComments = async () => side.replaceChildren(await commentsPanel(r, target, macros, () => ({ page, quote: sel?.text })))
   main.className = 'wide'
-  main.replaceChildren(
-    h('div', { class: 'pdf-tools' }, pageLabel, zoomCtl, h('span', { class: 'sp' }),
-      h('button', { class: 'btn', onclick: () => compose(r, target, { page }, () => void refreshComments()) }, '이 쪽에 질문'),
-      h('button', { class: 'btn quiet wide-only', onclick: () => side.scrollIntoView({ behavior: 'smooth' }) }, '코멘트 보기')),
-    data ? h('div', { class: 'pdf-area' }, host) : h('div', { class: 'pdf-missing empty' }, '이 PDF는 아직 이 기기에 없어요. 인터넷이 될 때 동기화해 주세요.'),
-    side, selBtn)
+  main.replaceChildren(tools,
+    data ? area : h('div', { class: 'pdf-missing empty' }, '이 PDF는 아직 이 기기에 없어요. 인터넷이 될 때 동기화해 주세요.'),
+    side, selBtn, data ? bar : '')
   await refreshComments()
   if (!data) return
-  let view: Awaited<ReturnType<typeof mountPdf>> | null = null
+
+  let view: PdfView | null = null
+  const pageEl = (n: number) => host.querySelector<HTMLElement>(`.pdf-page[data-page="${n}"]`)
+  const jump = (n: number) => {
+    const el = pageEl(Math.min(Math.max(1, n), view?.pages ?? 1))
+    if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - tools.getBoundingClientRect().bottom - 8 })
+  }
+  const showPage = () => { pageNo.textContent = `${page} / ${view?.pages ?? ''}` }
   const mount = async () => {
     view?.destroy()
     host.replaceChildren()
-    const keep = page
     view = await mountPdf(host, data, {
       zoom,
       onSelect: (s) => { sel = s; selBtn.hidden = !s },
-      onPage: (p) => { page = p; pageLabel.textContent = `${p} / ${view?.pages ?? ''}쪽` },
+      onPage: (p) => { page = p; showPage(); rememberPage(r, path, p) },
     })
-    host.querySelector<HTMLElement>(`.pdf-page[data-page="${keep}"]`)?.scrollIntoView({ block: 'start' })
+    showPage()
+    zoomBtn.hidden = zoom === 1
+    zoomBtn.textContent = `${Math.round(zoom * 100)}%`
   }
-  const drawZoom = () => zoomCtl.replaceChildren(...[1, 1.5, 2].map((z) => h('button', { class: z === zoom ? 'on' : '', onclick: () => { zoom = z; drawZoom(); void mount() } }, `${z}×`)))
-  drawZoom()
+  // zoom keeping the point under the fingers (or the top of the screen) where it was
+  const setZoom = async (z: number, at?: { x: number; y: number }) => {
+    z = Math.min(4, Math.max(1, z))
+    if (Math.abs(z - zoom) < 0.05) return
+    const y = at?.y ?? tools.getBoundingClientRect().bottom + 8
+    const els = [...host.querySelectorAll<HTMLElement>('.pdf-page')]
+    const el = els.find((e) => e.getBoundingClientRect().bottom > y) ?? els.at(-1)
+    const n = Number(el?.dataset.page ?? page)
+    const box = el?.getBoundingClientRect()
+    const frac = box ? (y - box.top) / box.height : 0
+    const hb = host.getBoundingClientRect()
+    const lx = (at?.x ?? hb.left) - hb.left
+    const ratio = z / zoom
+    const left = (host.scrollLeft + lx) * ratio - lx
+    zoom = z
+    await mount()
+    const nb = pageEl(n)?.getBoundingClientRect()
+    if (nb) window.scrollBy(0, nb.top + frac * nb.height - y)
+    host.scrollLeft = Math.max(0, left)
+  }
+
+  // two-finger pinch scales the drawn pages live, then redraws sharp at the new size
+  let pinch: { d: number; x: number; y: number; s: number } | null = null
+  let lastTap: { t: number; x: number; y: number } | null = null
+  let moved = false
+  const dist = (t: TouchList) => Math.hypot(t[0]!.clientX - t[1]!.clientX, t[0]!.clientY - t[1]!.clientY)
+  area.addEventListener('touchstart', (e) => {
+    moved = false
+    if (e.touches.length === 2) {
+      const x = (e.touches[0]!.clientX + e.touches[1]!.clientX) / 2, y = (e.touches[0]!.clientY + e.touches[1]!.clientY) / 2
+      const hb = host.getBoundingClientRect()
+      host.style.transformOrigin = `${x - hb.left + host.scrollLeft}px ${y - hb.top}px`
+      pinch = { d: dist(e.touches), x, y, s: 1 }
+    }
+  }, { passive: true })
+  area.addEventListener('touchmove', (e) => {
+    moved = true
+    if (!pinch || e.touches.length !== 2) return
+    e.preventDefault()
+    pinch.s = Math.min(4 / zoom, Math.max(1 / zoom, dist(e.touches) / pinch.d))
+    host.style.transform = `scale(${pinch.s})`
+  }, { passive: false })
+  area.addEventListener('touchend', (e) => {
+    if (pinch && e.touches.length < 2) {
+      const p = pinch
+      pinch = null
+      host.style.transform = ''
+      void setZoom(zoom * p.s, p)
+      return
+    }
+    if (moved || e.changedTouches.length !== 1 || e.touches.length) return
+    const t = e.changedTouches[0]!
+    const now = Date.now()
+    if (lastTap && now - lastTap.t < 320 && Math.hypot(t.clientX - lastTap.x, t.clientY - lastTap.y) < 30) {
+      e.preventDefault()
+      lastTap = null
+      void setZoom(zoom > 1 ? 1 : 2, { x: t.clientX, y: t.clientY })
+    } else lastTap = { t: now, x: t.clientX, y: t.clientY }
+  })
+  area.addEventListener('dblclick', (e) => { void setZoom(zoom > 1 ? 1 : 2, { x: e.clientX, y: e.clientY }) })
+
   await mount()
+  if (page > 1) jump(page)
   cleanup = () => view?.destroy()
 }
 

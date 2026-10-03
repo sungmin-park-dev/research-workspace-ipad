@@ -215,7 +215,23 @@ input:focus, .form textarea:focus { outline: 0; border-color: var(--text-3); }
 .pdf-area { background: var(--bg-sunken); padding: var(--sp-3) 0; }
 .pdf { display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); overflow-x: auto; padding: 0 8px; }
 .pdf-page { flex: none; position: relative; background: #fff; box-shadow: var(--shadow); }
-.pdf-page canvas { display: block; }
+.pdf-page { overflow: hidden; }
+.pdf-inner { position: absolute; top: 0; }
+.pdf-inner canvas { display: block; }
+.pdf-area { touch-action: pan-x pan-y; }
+.pdf { transform-origin: 0 0; }
+.pdf-tools .hint { color: var(--text-3); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.page-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--tabs-h) + 12px + env(safe-area-inset-bottom)); z-index: 24; display: flex; align-items: center; gap: 2px; padding: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; box-shadow: var(--shadow); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.page-bar button { min-width: 40px; height: 34px; border-radius: 999px; font-size: var(--fs-lg); color: var(--text-2); }
+.page-bar button:active { background: var(--bg-hover); }
+.page-bar .n { min-width: 64px; text-align: center; color: var(--text); }
+.page-bar .z { font-size: var(--fs-xs); padding: 0 var(--sp-2); border-left: 1px solid var(--line); border-radius: 0 999px 999px 0; }
+.page-bar .z[hidden] { display: none; }
+.floating.above-bar { bottom: calc(var(--tabs-h) + 64px + env(safe-area-inset-bottom)); }
+.pdf-side { padding-bottom: 72px; }
+.main-docs { display: flex; flex-direction: column; gap: var(--sp-3); }
+.card.main-doc .kicker { color: var(--text-3); font-size: var(--fs-xs); font-weight: 600; }
+.card.main-doc .btn { align-self: flex-start; margin-top: var(--sp-1); }
 .pdf-side { max-width: 760px; margin: 0 auto; width: 100%; padding: var(--sp-5) var(--sp-4) 0; }
 .pdf-missing { padding: var(--sp-6) var(--sp-4); }
 .floating { position: fixed; right: var(--sp-4); bottom: calc(var(--tabs-h) + 16px + env(safe-area-inset-bottom)); z-index: 25; height: 40px; padding: 0 var(--sp-4); box-shadow: var(--shadow); border-radius: 999px; }
